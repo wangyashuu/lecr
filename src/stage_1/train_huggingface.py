@@ -2,21 +2,20 @@ import os
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, Dataset
-
 from lightning import (
     LightningModule,
     Trainer,
     seed_everything,
 )
-from sklearn.model_selection import train_test_split
 from lightning.pytorch.loggers import WandbLogger
 from lightning.pytorch.callbacks import LearningRateMonitor, ModelCheckpoint
 from lightning.pytorch.strategies.ddp import DDPStrategy
 from transformers import AutoTokenizer, AutoConfig, AutoModel
 import wandb
-
+from sklearn.model_selection import train_test_split
 
 from prepare.read import read_original_data, read_generated_data
+
 
 # https://pytorch-lightning.readthedocs.io/en/stable/notebooks/lightning_examples/text-transformers.html
 # https://huggingface.co/docs/transformers/training
@@ -61,9 +60,10 @@ def create_datasets(config, input_path, tokenizer):
 
     topics, content, _ = read_original_data(input_path)
     all_set = read_generated_data(input_path, triplet=config.triplet)
+    all_set = all_set.iloc[:1000]
     text_dicts = dict(topic=topics.loc, content=content.loc)
     sets = train_test_split(
-        all_set, test_size=config.test_size, stratify=all_set["topic_id"]
+        all_set, test_size=config.test_size, # stratify=all_set["topic_id"]
     )  #
     return [
         TCRelationDataset(
@@ -133,7 +133,7 @@ class StepModule(LightningModule):
                 mean_pooling(self.model(**x1), x1),
                 mean_pooling(self.model(**x2), x2),
             )
-            if self._triplet
+            if self._tripletautwa
             else self._loss(
                 mean_pooling(self.model(**x0), x0),
                 mean_pooling(self.model(**x1), x1),
