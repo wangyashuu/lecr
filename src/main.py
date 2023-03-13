@@ -11,13 +11,21 @@ default_config = Box(
         ),
         metrics=[],
         dataset=dict(triplet=False, test_size=0.3),
-        train_loader=dict(shuffle=True, batch_size=16, num_workers=8),
-        val_loader=dict(shuffle=False, batch_size=32, num_workers=8),
-        loss=dict(name="CosineEmbeddingLoss"),
-        trainer=dict(
-            accelerator="gpu", devices=[0, 1, 2, 3, 4, 5, 6, 7], max_epochs=1
+        train_loader=dict(
+            shuffle=True, pin_memory=True, batch_size=2, num_workers=4
         ),
-        optimizers=[dict(name="AdamW", lr=0.001, weight_decay=0)],
+        val_loader=dict(
+            shuffle=False, pin_memory=True, batch_size=4, num_workers=4
+        ),
+        loss=dict(name="cosine_embedding_loss"),  # CosineEmbeddingLoss
+        trainer=dict(
+            accelerator="gpu",
+            devices=[3, 4, 5, 6, 7],
+            max_epochs=16,
+            precision=16,
+            # amp_backend="apex",
+        ),
+        optimizers=[dict(name="AdamW", lr=0.00001, weight_decay=0)],
         schedulers=[dict(name="ExponentialLR", gamma=0.99)],
         seed=2023,
         logging=dict(save_dir="logging"),

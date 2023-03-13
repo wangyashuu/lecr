@@ -24,7 +24,7 @@ def read_original_data(data_path):
     return topics, content, correlations
 
 
-def read_generated_data(data_path, triplet=False):
+def read_generated_data(data_path, triplet=False, include_rands=False):
     generated_data_path = os.path.join(data_path, "learning-equality/v1/")
     correlated = pd.read_csv(
         generated_data_path + "correlated.csv",
@@ -34,16 +34,19 @@ def read_generated_data(data_path, triplet=False):
         generated_data_path + "uncorrelated_neighbors.csv",
         converters={"content_ids": ast.literal_eval},
     ).set_index("topic_id")
-    uncorrelated_rands = pd.read_csv(
-        generated_data_path + "uncorrelated_rands.csv",
-        converters={"content_ids": ast.literal_eval},
-    ).set_index("topic_id")
+    if include_rands:
+        uncorrelated_rands = pd.read_csv(
+            generated_data_path + "uncorrelated_rands.csv",
+            converters={"content_ids": ast.literal_eval},
+        ).set_index("topic_id")
 
-    uncorrelated = (
-        pd.concat([uncorrelated_neighbors, uncorrelated_rands])
-        .groupby(["topic_id"])
-        .agg({"content_ids": lambda x: list(set(sum(x.tolist(), [])))})
-    )
+        uncorrelated = (
+            pd.concat([uncorrelated_neighbors, uncorrelated_rands])
+            .groupby(["topic_id"])
+            .agg({"content_ids": lambda x: list(set(sum(x.tolist(), [])))})
+        )
+    else:
+        uncorrelated = uncorrelated_neighbors
 
     if triplet:
         triplet_relations = (
@@ -60,7 +63,7 @@ def read_generated_data(data_path, triplet=False):
             .dropna()
             .reset_index(drop=True)
         )
-        return triplet
+        return triplet_relations
 
     contrastive_relations = (
         correlated.explode("content_ids")

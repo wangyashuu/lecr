@@ -1,5 +1,4 @@
 import os
-import pandas as pd
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, Dataset
@@ -13,7 +12,7 @@ from sklearn.model_selection import train_test_split
 from lightning.pytorch.loggers import WandbLogger
 from lightning.pytorch.callbacks import LearningRateMonitor, ModelCheckpoint
 from lightning.pytorch.strategies.ddp import DDPStrategy
-from transformers import AutoTokenizer, AutoModel
+from transformers import AutoTokenizer, AutoConfig, AutoModel
 import wandb
 
 
@@ -54,15 +53,18 @@ class TCRelationDataset(Dataset):
 
 
 def create_datasets(config, input_path, tokenizer):
-    transform_x = lambda x: tokenizer(
-        x, padding="max_length", truncation=True, return_tensors="pt"
-    )
+    def transform_x(x):
+        out = tokenizer(
+            x, padding="max_length", truncation=True, return_tensors="pt"
+        )
+        return {k: torch.squeeze(out[k]) for k in out}
+
     topics, content, _ = read_original_data(input_path)
     all_set = read_generated_data(input_path, triplet=config.triplet)
     text_dicts = dict(topic=topics.loc, content=content.loc)
     sets = train_test_split(
         all_set, test_size=config.test_size, stratify=all_set["topic_id"]
-    )
+    )  #
     return [
         TCRelationDataset(
             s,
@@ -95,7 +97,12 @@ def create_schedulers(optimizers, confs):
 
 
 def create_loss(config):
-    return getattr(nn, config.name)(**config.get("params", {}))
+    def loss_function(*args):
+        return getattr(nn.functional, config.name)(
+            *args, **config.get("params", {})
+        )
+
+    return loss_function
 
 
 class StepModule(LightningModule):
@@ -109,31 +116,31 @@ class StepModule(LightningModule):
         self._triplet = triplet
 
     def training_step(self, batch, batch_idx):
-        loss_vals = self.forward_step(batch)
-        self.log_dict({f"train/{k}": v for k, v in loss_vals.items()})
-        loss = loss_vals.get("loss") or next(iter(loss_vals.values()))
-        return dict(loss=loss)
+        loss = self.forward_step(batch)
+        self.log_dict({f"train/loss": loss})
+        return loss
 
     def validation_step(self, batch, batch_idx):
-        loss_vals = self.forward_step(batch)
-        self.log_dict(
-            {f"val/{k}": v for k, v in loss_vals.items()}, sync_dist=True
-        )
-        loss = loss_vals.get("loss") or next(iter(loss_vals.values()))
-        return dict(loss=loss)
+        loss = self.forward_step(batch)
+        self.log_dict({f"val/loss": loss}, sync_dist=True)
+        return loss
 
     def forward_step(self, batch):
-        loss_vals = []
         x0, x1, x2 = batch
-        out0 = mean_pooling(self.model(x0), x0)
-        out1 = mean_pooling(self.model(x1), x1)
         loss_val = (
-            self._loss(out0, out1, mean_pooling(self.model(x2), x2))
+            self._loss(
+                mean_pooling(self.model(**x0), x0),
+                mean_pooling(self.model(**x1), x1),
+                mean_pooling(self.model(**x2), x2),
+            )
             if self._triplet
-            else self._loss(out0, out1, x2)
+            else self._loss(
+                mean_pooling(self.model(**x0), x0),
+                mean_pooling(self.model(**x1), x1),
+                x2,
+            )
         )
-        loss_vals.append(loss_val)
-        return loss_vals
+        return loss_val
 
     def configure_optimizers(self):
         optimizers = self._optimizers
@@ -144,7 +151,7 @@ class StepModule(LightningModule):
 # Mean Pooling - Take attention mask into account for correct averaging
 def mean_pooling(model_output, model_input):
     attention_mask = model_input["attention_mask"]
-    token_embeddings = model_output[0]
+    token_embeddings = model_output.last_hidden_state  # model_output[0]
     input_mask_expanded = (
         attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
     )
@@ -159,12 +166,15 @@ def train(config, input_path):
     # see: https://github.com/wandb/wandb/blob/cce611e2e518951064833b80aee975fa139a85ee/wandb/cli/cli.py#L872
     wandb_logger = WandbLogger(
         save_dir=config.logging.save_dir,
-        group=f"{config.model_name}",
+        group=f"stage1",
+        project="lecr",
         config=config,
     )
-
+    # model_config = AutoConfig.from_pretrained(config.model_name)
     tokenizer = AutoTokenizer.from_pretrained(config.model_name)
-    backbone = AutoModel.from_pretrained(config.model_name)
+    backbone = AutoModel.from_pretrained(
+        config.model_name, add_pooling_layer=False
+    )
 
     train_set, test_set = create_datasets(
         config.dataset, input_path=input_path, tokenizer=tokenizer
