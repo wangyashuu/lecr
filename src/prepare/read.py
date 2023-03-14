@@ -24,7 +24,7 @@ def read_original_data(data_path):
     return topics, content, correlations
 
 
-def read_generated_data(data_path, triplet=False, include_rands=False):
+def read_generated_data(data_path, include_rands=False):
     generated_data_path = os.path.join(data_path, "learning-equality/v1/")
     correlated = pd.read_csv(
         generated_data_path + "correlated.csv",
@@ -47,6 +47,11 @@ def read_generated_data(data_path, triplet=False, include_rands=False):
         )
     else:
         uncorrelated = uncorrelated_neighbors
+    return correlated, uncorrelated
+
+
+def read_formated_data(data_path, triplet=False, include_rands=False):
+    correlated, uncorrelated = read_generated_data(data_path, include_rands)
 
     if triplet:
         triplet_relations = (

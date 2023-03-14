@@ -7,7 +7,7 @@ from sentence_transformers.evaluation import (
 )
 
 
-from prepare.read import read_original_data, read_generated_data
+from prepare.read import read_original_data, read_formated_data
 
 
 # https://huggingface.co/blog/how-to-train-sentence-transformers
@@ -35,16 +35,19 @@ class TCRelationDataset(Dataset):
 
 def create_datasets(config, input_path):
     topics, content, _ = read_original_data(input_path)
-    all_set = read_generated_data(input_path, triplet=config.triplet)
-    # all_set = all_set.iloc[:3000]
-    print("dataset size:", len(all_set))
-    text_dicts = dict(topic=topics.loc, content=content.loc)
-    train_set, test_set = train_test_split(
-        all_set, test_size=config.test_size, stratify=all_set["topic_id"]
-    )  #
+    train_topics, test_topics = train_test_split(
+        topics, test_size=config.test_size, random_state=config.random_state
+    )
+    print("topics size: ", len(train_topics), "/", len(test_topics))
+
+    all_set = read_formated_data(input_path, triplet=config.triplet)
+    train_set = all_set[all_set["topic_id"].isin(train_topics.index)]
+    test_set = all_set[all_set["topic_id"].isin(test_topics.index)]
+    print("samples size: ", len(train_set), "/", len(test_set))
+
     train_dset = TCRelationDataset(
         train_set,
-        text_dicts=text_dicts,
+        text_dicts=dict(topic=topics.loc, content=content.loc),
         triplet=config.triplet,
     )
     test_data_for_evaluator = (
@@ -100,9 +103,10 @@ def train(config, input_path):
         epochs=config.trainer.max_epochs,
         use_amp=config.trainer.use_amp,
         warmup_steps=warmup_steps,
-        output_path="./output/saved",
-        checkpoint_path="./output/checkpoint",
+        output_path=config.output_path +  "/saved",
+        checkpoint_path=config.output_path + "/checkpoint",
         evaluator=evaluator,
         evaluation_steps=500,
+        optimizer_params=config.optimizer.params
     )
     return model

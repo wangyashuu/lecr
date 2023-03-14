@@ -14,7 +14,7 @@ from transformers import AutoTokenizer, AutoConfig, AutoModel
 import wandb
 from sklearn.model_selection import train_test_split
 
-from prepare.read import read_original_data, read_generated_data
+from prepare.read import read_original_data, read_formated_data
 
 
 # https://pytorch-lightning.readthedocs.io/en/stable/notebooks/lightning_examples/text-transformers.html
@@ -59,12 +59,15 @@ def create_datasets(config, input_path, tokenizer):
         return {k: torch.squeeze(out[k]) for k in out}
 
     topics, content, _ = read_original_data(input_path)
-    all_set = read_generated_data(input_path, triplet=config.triplet)
-    all_set = all_set.iloc[:1000]
+    train_topics, test_topics = train_test_split(
+        topics, test_size=config.test_size, random_state=config.random_state
+    )
+
+    all_set = read_formated_data(input_path, triplet=config.triplet)
+    train_set = all_set[all_set["topic_id"].isin(train_topics.index)]
+    test_set = all_set[all_set["topic_id"].isin(test_topics.index)]
+
     text_dicts = dict(topic=topics.loc, content=content.loc)
-    sets = train_test_split(
-        all_set, test_size=config.test_size, # stratify=all_set["topic_id"]
-    )  #
     return [
         TCRelationDataset(
             s,
@@ -72,7 +75,7 @@ def create_datasets(config, input_path, tokenizer):
             transform_x=transform_x,
             triplet=config.triplet,
         )
-        for s in sets
+        for s in [train_set, test_set]
     ]
 
 
