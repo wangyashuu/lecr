@@ -10,7 +10,8 @@ from lightning import (
 from lightning.pytorch.loggers import WandbLogger
 from lightning.pytorch.callbacks import LearningRateMonitor, ModelCheckpoint
 from lightning.pytorch.strategies.ddp import DDPStrategy
-from transformers import AutoTokenizer, AutoConfig, AutoModel
+from transformers import AutoTokenizer, AutoModel
+from box import Box
 import wandb
 from sklearn.model_selection import train_test_split
 
@@ -20,6 +21,35 @@ from prepare.read import read_original_data, read_formated_data
 # https://pytorch-lightning.readthedocs.io/en/stable/notebooks/lightning_examples/text-transformers.html
 # https://huggingface.co/docs/transformers/training
 # https://huggingface.co/sentence-transformers/paraphrase-multilingual-mpnet-base-v2
+
+
+default_config = Box(
+    dict(
+        model_name=(
+            "sentence-transformers/paraphrase-multilingual-mpnet-base-v2"
+        ),
+        dataset=dict(triplet=False, test_size=0.2, random_state=2023),
+        train_loader=dict(
+            shuffle=True, pin_memory=True, batch_size=4, num_workers=16
+        ),
+        val_loader=dict(
+            shuffle=False, pin_memory=True, batch_size=4, num_workers=16
+        ),
+        loss=dict(
+            name="cosine_embedding_loss", params=dict(margin=1)
+        ),  # CosineEmbeddingLoss
+        trainer=dict(
+            accelerator="gpu",
+            devices=[0, 1, 2, 3, 4],
+            max_epochs=1,
+            # precision=16,
+        ),
+        optimizers=[dict(name="AdamW", lr=0.00001, weight_decay=0)],
+        schedulers=[dict(name="ExponentialLR", gamma=0.99)],
+        seed=2023,
+        logging=dict(save_dir="./output/logging"),
+    )
+)
 
 
 class TCRelationDataset(Dataset):
@@ -164,6 +194,7 @@ def mean_pooling(model_output, model_input):
 
 
 def train(config, input_path):
+    config = default_config + config
     seed_everything(config.seed, True)
     # wandb auto set project name based on git (not documented)
     # see: https://github.com/wandb/wandb/blob/cce611e2e518951064833b80aee975fa139a85ee/wandb/cli/cli.py#L872
