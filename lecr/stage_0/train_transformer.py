@@ -1,9 +1,12 @@
 from sklearn.model_selection import train_test_split
+import numpy as np
+from box import Box
 from torch.utils.data import DataLoader, Dataset
-from sentence_transformers import SentenceTransformer, InputExample, losses
-from sentence_transformers.evaluation import (
-    BinaryClassificationEvaluator,
-    TripletEvaluator,
+from sentence_transformers import (
+    SentenceTransformer,
+    InputExample,
+    losses,
+    evaluation,
 )
 
 
@@ -13,24 +16,56 @@ from prepare.read import read_original_data, read_formated_data
 # https://huggingface.co/blog/how-to-train-sentence-transformers
 
 
+default_config = Box(
+    dict(
+        model_name=(
+            "sentence-transformers/paraphrase-multilingual-mpnet-base-v2"
+        ),
+        dataset=dict(format="mnr", test_size=0.1, random_state=2023),
+        train_loader=dict(
+            shuffle=True, pin_memory=True, batch_size=128, num_workers=16
+        ),
+        val_loader=dict(
+            shuffle=False, pin_memory=True, batch_size=128, num_workers=16
+        ),
+        optimizer=dict(name="AdamW", params=dict(lr=3e-5)),
+        trainer=dict(max_epochs=1, use_amp=True, evaluation_steps=3200),
+        output_path="./output_v9",
+        seed=2023,
+    )
+)
+
+
 class TCRelationDataset(Dataset):
-    def __init__(self, dataset, text_dicts, triplet=False):
+    def __init__(self, dataset, text_dicts, format, random_switch=True):
         self.dataset = dataset
         self.text_dicts = text_dicts
-        self.triplet = triplet
+        self.format = format
+        self.random_switch = random_switch
 
     def __len__(self):
         return len(self.dataset)
 
     def __getitem__(self, idx):
-        tid, column_val1, column_val2 = self.dataset.iloc[idx]
-        t = self.text_dicts["topic"][tid]["title"]
-        x1 = self.text_dicts["content"][column_val1]["title"]
-        if not self.triplet:
+        if self.format == "mnr":
+            tid, column_val1 = self.dataset.iloc[idx]
+            x0 = self.text_dicts["topic"][tid]["title"]
+            x1 = self.text_dicts["content"][column_val1]["title"]
+            return InputExample(texts=[x0, x1])
+        elif self.format == "triplet":
+            tid, column_val1, column_val2 = self.dataset.iloc[idx]
+            x0 = self.text_dicts["topic"][tid]["title"]
+            x1 = self.text_dicts["content"][column_val1]["title"]
+            x2 = self.text_dicts["content"][column_val2]["title"]
+            return InputExample(texts=[x0, x1, x2])
+        else:
+            tid, column_val1, column_val2 = self.dataset.iloc[idx]
+            x0 = self.text_dicts["topic"][tid]["title"]
+            x1 = self.text_dicts["content"][column_val1]["title"]
+            if self.random_switch and np.random.rand() > 0.5:
+                x0, x1 = x1, x0
             y = column_val2
-            return InputExample(texts=[t, x1], label=y)
-        x2 = self.text_dicts["content"][column_val2]["title"]
-        return InputExample(texts=[t, x1, x2])
+            return InputExample(texts=[x0, x1], label=y)
 
 
 def create_datasets(config, input_path):
@@ -40,33 +75,25 @@ def create_datasets(config, input_path):
     )
     print("topics size: ", len(train_topics), "/", len(test_topics))
 
-    all_set = read_formated_data(input_path, triplet=config.triplet)
-    train_set = all_set[all_set["topic_id"].isin(train_topics.index)]
-    test_set = all_set[all_set["topic_id"].isin(test_topics.index)]
-    print("samples size: ", len(train_set), "/", len(test_set))
+    train_set, test_data = read_formated_data(
+        input_path,
+        format=config.format,
+        train_topics=train_topics,
+        test_topics=test_topics,
+    )
+    print("train size: ", len(train_set))
 
     train_dset = TCRelationDataset(
         train_set,
         text_dicts=dict(topic=topics.loc, content=content.loc),
-        triplet=config.triplet,
+        format=config.format,
+        random_switch=config.random_switch,
     )
-    test_data_for_evaluator = (
-        [
-            topics.loc[test_set["topic_id"]]["title"].tolist(),
-            content.loc[test_set["content_id_corr"]]["title"].tolist(),
-            content.loc[test_set["content_id_uncorr"]]["title"].tolist(),
-        ]
-        if config.triplet
-        else [
-            topics.loc[test_set["topic_id"]]["title"].tolist(),
-            content.loc[test_set["content_id"]]["title"].tolist(),
-            test_set["correlated"].tolist(),
-        ]
-    )
-    return train_dset, test_data_for_evaluator
+    return train_dset, test_data
 
 
 def train(config, input_path):
+    config = default_config + config
     train_set, test_data = create_datasets(
         config.dataset,
         input_path=input_path,
@@ -76,37 +103,34 @@ def train(config, input_path):
 
     # 10% of train data
     warmup_steps = int(len(train_loader) * config.trainer.max_epochs * 0.1)
-    model = SentenceTransformer(config.model_name, device="cuda")
-    train_loss = getattr(
-        losses,
-        config.loss.name,
-        "TripletLoss" if config.dataset.triplet else "ContrastiveLoss",
-    )(model, **config.loss.params)
-
+    model = SentenceTransformer(config.model_name)
     evaluator_params = dict(
-        name=config.loss.name,
+        name=config.dataset.format,
         batch_size=config.val_loader.batch_size,
         show_progress_bar=True,
         write_csv=True,
     )
-
-    evaluator = (
-        TripletEvaluator(
-            *test_data, main_distance_function=0, **evaluator_params
+    if config.dataset.format == "mnr":
+        train_loss = losses.MultipleNegativesRankingLoss(model)
+        evaluator = evaluation.RerankingEvaluator(test_data, **evaluator_params)
+    elif config.dataset.format == "triplet":
+        train_loss = losses.TripletLoss(model)
+        evaluator = evaluation.TripletEvaluator(*test_data, **evaluator_params)
+    else:
+        train_loss = losses.ContrastiveLoss(model)
+        evaluator = evaluation.BinaryClassificationEvaluator(
+            *test_data, **evaluator_params
         )
-        if config.dataset.triplet
-        else BinaryClassificationEvaluator(*test_data, **evaluator_params)
-    )
 
     model.fit(
         train_objectives=[(train_loader, train_loss)],
         epochs=config.trainer.max_epochs,
         use_amp=config.trainer.use_amp,
         warmup_steps=warmup_steps,
-        output_path=config.output_path +  "/saved",
+        output_path=config.output_path + "/saved",
         checkpoint_path=config.output_path + "/checkpoint",
         evaluator=evaluator,
-        evaluation_steps=500,
-        optimizer_params=config.optimizer.params
+        evaluation_steps=config.trainer.evaluation_steps,
+        optimizer_params=config.optimizer.params,
     )
     return model

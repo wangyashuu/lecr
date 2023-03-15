@@ -12,58 +12,28 @@ print(
     else "",
 )
 
-huggingface_config = Box(
-    dict(
-        model_name=(
-            "sentence-transformers/paraphrase-multilingual-mpnet-base-v2"
-        ),
-        dataset=dict(triplet=False, test_size=0.2, random_state=2023),
-        train_loader=dict(
-            shuffle=True, pin_memory=True, batch_size=4, num_workers=16
-        ),
-        val_loader=dict(
-            shuffle=False, pin_memory=True, batch_size=4, num_workers=16
-        ),
-        loss=dict(
-            name="cosine_embedding_loss", params=dict(margin=1)
-        ),  # CosineEmbeddingLoss
-        trainer=dict(
-            accelerator="gpu",
-            devices=[0, 1, 2, 3, 4],
-            max_epochs=1,
-            # precision=16,
-        ),
-        optimizers=[dict(name="AdamW", lr=0.00001, weight_decay=0)],
-        schedulers=[dict(name="ExponentialLR", gamma=0.99)],
-        seed=2023,
-        logging=dict(save_dir="./output/logging"),
-    )
-)
 
+# config = Box(dict())
+input_path = "./input"
 
-transformer_config = Box(
+config = Box(
     dict(
-        model_name=(
-            "sentence-transformers/paraphrase-multilingual-mpnet-base-v2"
+        # model_name="/root/lecr/output_v15/saved",
+        dataset=dict(
+            triplet=False, random_switch=True, test_size=0.1, random_state=2023
         ),
-        dataset=dict(triplet=False, test_size=0.1, random_state=2023),
         train_loader=dict(
             shuffle=True, pin_memory=True, batch_size=32, num_workers=16
         ),
         val_loader=dict(
             shuffle=False, pin_memory=True, batch_size=64, num_workers=16
         ),
-        optimizer=dict(name="AdamW", params=dict(lr=2e-5)),
-        loss=dict(name="ContrastiveLoss", params=dict(margin=1)),
-        # loss=dict(name="TripletLoss", params=dict()), #
-        trainer=dict(max_epochs=1, use_amp=True),
-        output_path='./output_v4',
+        optimizer=dict(name="AdamW", params=dict(lr=3e-5)),
+        trainer=dict(max_epochs=64, use_amp=True, evaluation_steps=3200),
+        output_path="./output_v18",
         seed=2023,
     )
 )
 
-config = dict()
-input_path = "./input"
-
-train_transformer(transformer_config + Box(config), input_path=input_path)
+train_transformer(config, input_path=input_path)
 # train_huggingface(huggingface_config + Box(config), input_path=input_path)
