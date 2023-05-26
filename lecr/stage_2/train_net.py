@@ -26,7 +26,7 @@ from lecr.eval.f2 import compute_f2scores_for
 default_config = Box(
     dict(
         model_name="/root/lecr/output_v15/saved",
-        nn_name=None,
+        nn_name="/root/lecr/out/output_nn_v0/saved",
         dataset=dict(test_size=0.1, top_k=100, random_state=2023),
         train_loader=dict(
             shuffle=True, pin_memory=True, batch_size=4096, num_workers=16
@@ -40,10 +40,10 @@ default_config = Box(
             max_epochs=1,
             # precision=16,
         ),
-        optimizers=[dict(name="AdamW", lr=0.001, weight_decay=0)],
+        optimizers=[dict(name="AdamW", lr=0.000001, weight_decay=0)],
         schedulers=[dict(name="ExponentialLR", gamma=0.99)],
         seed=2023,
-        logging=dict(save_dir="./out/output_nn_v0"),
+        logging=dict(save_dir="./out/output_nn_v3"),
     )
 )
 
@@ -215,8 +215,8 @@ def train(config, input_path):
     def text_encode(*args, **kwargs):
         return encoder.encode(*args, convert_to_tensor=True, **kwargs)
 
-    criterion = nn.BCEWithLogitsLoss()
     backbone = create_model(config.nn_name)
+    criterion = nn.BCEWithLogitsLoss()
     optimizers = create_optimizers(backbone, config.optimizers)
     schedulers = create_schedulers(optimizers, config.schedulers)
 
@@ -243,12 +243,45 @@ def train(config, input_path):
     torch.save(
         backbone.state_dict(), os.path.join(config.logging.save_dir, "saved")
     )
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     predictions = get_predictions(
         test_correlations,
         test_loader,
         text_encode,
         backbone,
-        device=encoder.device,
+        device=device,
+    )
+    scores = compute_f2scores_for(test_correlations, predictions)
+    score = np.mean(scores)
+    print("score", score)
+    wandb.finish()
+    return backbone
+
+
+def eval(config, input_path):
+    config = default_config + config
+    seed_everything(config.seed, True)
+
+    sets, test_correlations = create_datasets(
+        config.dataset, input_path=input_path, model_name=config.model_name
+    )
+    train_set, test_set = sets
+    test_loader = DataLoader(test_set, **config.val_loader)
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    encoder = SentenceTransformer(config.model_name, device=device)
+
+    def text_encode(*args, **kwargs):
+        return encoder.encode(*args, convert_to_tensor=True, **kwargs)
+
+    backbone = create_model(config.nn_name)
+    predictions = get_predictions(
+        test_correlations,
+        test_loader,
+        text_encode,
+        backbone,
+        device=device,
+        output=config.logging,
     )
     scores = compute_f2scores_for(test_correlations, predictions)
     score = np.mean(scores)
@@ -259,7 +292,13 @@ def train(config, input_path):
 
 @torch.no_grad()
 def get_predictions(
-    target_correlations, val_loader, text_encode, model, device, threshold=0.5
+    target_correlations,
+    val_loader,
+    text_encode,
+    model,
+    device,
+    threshold=0.5,
+    output=None,
 ):
     y_hat = []
     model.to(device)
@@ -282,6 +321,8 @@ def get_predictions(
             "correlated": y_hat > threshold,
         }
     )
+    if output is not None:
+        predictions.to_csv(os.path.join(output, "predictions.csv"))
     predictions = (
         predictions[predictions["correlated"]]
         .groupby(["topic_id"])
@@ -298,8 +339,12 @@ def get_predictions(
             "content_ids": content_ids,
         }
     ).set_index("topic_id")
-
+    if output is not None:
+        correlated_predictions.to_csv(
+            os.path.join(output, "correlated_predictions.csv")
+        )
     return correlated_predictions
 
 
+# eval(Box({}), input_path="./input")
 train(Box({}), input_path="./input")

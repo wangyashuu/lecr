@@ -3,9 +3,9 @@ def get_tp(y_truth, y_pred):
     return tp
 
 
-def fbeta_score(y_truth, y_pred, beta=2, eps=1e-10):
+def fbeta_score(y_truth, y_pred, beta=2, eps=1e-16):
     tp = get_tp(y_truth, y_pred)
-    precision = len(tp) / len(y_pred)
+    precision = len(tp) / (len(y_pred) + eps)
     recall = len(tp) / len(y_truth)
     f = (
         (1 + beta**2)
@@ -15,9 +15,9 @@ def fbeta_score(y_truth, y_pred, beta=2, eps=1e-10):
     return f
 
 
-def precision_score(y_truth, y_pred):
+def precision_score(y_truth, y_pred, eps=1e-16):
     tp = get_tp(y_truth, y_pred)
-    precision = len(tp) / len(y_pred)
+    precision = len(tp) / (len(y_pred) + eps)
     return precision
 
 
